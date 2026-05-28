@@ -11,6 +11,7 @@ import {
   UrlNavigationForm,
 } from "../../../features/browser-navigation";
 import { BreakpointPicker } from "../../../features/breakpoint-management";
+import { FigmaImportAction } from "../../../features/figma-import";
 import { OverlayControls } from "../../../features/overlay-controls";
 import { ReferenceImageAction } from "../../../features/reference-image";
 import { Toolbar } from "../../../shared/ui/toolbar";
@@ -30,6 +31,7 @@ type ControlPanelProps = {
   onBreakpointImport: () => void;
   onBreakpointOpenChange: (open: boolean) => void;
   onBreakpointSelect: (page: ProjectPage, resolution: ResolutionPreset) => void;
+  onFigmaImportOpen: () => void;
   onReferenceSelect: () => void;
   onResolutionUpdate: (
     updater: (resolution: ResolutionPreset) => ResolutionPreset,
@@ -53,6 +55,7 @@ export function ControlPanel({
   onBreakpointImport,
   onBreakpointOpenChange,
   onBreakpointSelect,
+  onFigmaImportOpen,
   onReferenceSelect,
   onResolutionUpdate,
   onUrlDraftChange,
@@ -79,6 +82,7 @@ export function ControlPanel({
         onOpenChange={onBreakpointOpenChange}
         onSelect={onBreakpointSelect}
       />
+      <FigmaImportAction onOpen={onFigmaImportOpen} />
       <ReferenceImageAction image={activeImage} onSelect={onReferenceSelect} />
       <OverlayControls
         diff={diff}

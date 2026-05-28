@@ -34,7 +34,23 @@ export type ReferenceImage = {
   height: number;
   sizeBytes: number;
   createdAt: string;
+  source?: ReferenceImageSource;
 };
+
+export type ReferenceImageSource =
+  | { type: "local"; sourcePath: string }
+  | {
+      type: "figma";
+      fileKey: string;
+      fileName: string;
+      fileVersion: string;
+      pageNodeId: string;
+      pageName: string;
+      frameNodeId: string;
+      frameName: string;
+      scale: number;
+      importedAt: string;
+    };
 
 export type ResolutionPreset = {
   id: string;
@@ -76,11 +92,69 @@ export type AppData = {
   pages: ProjectPage[];
   resolutions: ResolutionPreset[];
   referenceImages: ReferenceImage[];
+  figma?: FigmaSettings;
+};
+
+export type FigmaSettings = {
+  fileUrl: string;
+  fileKey?: string;
+  pageNodeId?: string;
+  updatedAt?: string;
 };
 
 export type ImportedReferenceImage = {
   image: ReferenceImage;
   sourcePath: string;
+};
+
+export type FigmaAuthStatus = {
+  configured: boolean;
+  connected: boolean;
+  expiresAt?: string;
+  reason?: string;
+  userId?: string;
+};
+
+export type FigmaFileRequest = {
+  fileUrl: string;
+};
+
+export type FigmaFramesRequest = {
+  fileKey: string;
+  pageNodeId: string;
+};
+
+export type FigmaImportFrameRequest = {
+  projectId: string;
+  fileKey: string;
+  fileName: string;
+  fileVersion: string;
+  pageNodeId: string;
+  pageName: string;
+  frameNodeId: string;
+  frameName: string;
+  scale: number;
+};
+
+export type FigmaPageSummary = {
+  id: string;
+  name: string;
+};
+
+export type FigmaFrameSummary = {
+  id: string;
+  name: string;
+  type: string;
+  width: number;
+  height: number;
+  thumbnailUrl: string | null;
+};
+
+export type FigmaFileSummary = {
+  fileKey: string;
+  fileName: string;
+  fileVersion: string;
+  pages: FigmaPageSummary[];
 };
 
 export type UpdateStatus =
@@ -143,6 +217,12 @@ export type PixelPerfectApi = {
   saveAppData(data: AppData): Promise<AppData>;
   selectReferenceImage(projectId: string): Promise<ImportedReferenceImage | null>;
   selectReferenceImages(projectId: string): Promise<ImportedReferenceImage[]>;
+  getFigmaAuthStatus(): Promise<FigmaAuthStatus>;
+  connectFigma(): Promise<FigmaAuthStatus>;
+  disconnectFigma(): Promise<FigmaAuthStatus>;
+  getFigmaFile(input: FigmaFileRequest): Promise<FigmaFileSummary>;
+  listFigmaFrames(input: FigmaFramesRequest): Promise<FigmaFrameSummary[]>;
+  importFigmaFrame(input: FigmaImportFrameRequest): Promise<ImportedReferenceImage>;
   configureBrowser(input: BrowserViewConfig): Promise<boolean>;
   configureBrowserPanes(input: BrowserPanesConfig): Promise<boolean>;
   goBack(): Promise<boolean>;

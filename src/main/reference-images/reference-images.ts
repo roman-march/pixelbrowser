@@ -1,11 +1,25 @@
 import { app, dialog } from "electron";
 import type { BrowserWindow, OpenDialogOptions } from "electron";
+import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, mkdir, stat } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { imageSize } from "image-size";
-import type { ImportedReferenceImage, ReferenceImage } from "../../shared/types";
+import type {
+  ImportedReferenceImage,
+  ReferenceImage,
+  ReferenceImageSource,
+} from "../../shared/types";
+
+type ReferenceImageBufferInput = {
+  projectId: string;
+  fileName: string;
+  buffer: Buffer | Uint8Array;
+  mimeType: ReferenceImage["mimeType"];
+  source?: ReferenceImageSource;
+  sourcePath?: string;
+};
 
 export async function selectReferenceImage(
   ownerWindow: BrowserWindow | null,
@@ -78,7 +92,7 @@ async function importReferenceImage(
   const image: ReferenceImage = {
     id,
     projectId,
-    fileName: sourcePath.split(/[\\/]/).pop() ?? targetName,
+    fileName: basename(sourcePath) || targetName,
     filePath: targetPath,
     fileUrl: pathToFileURL(targetPath).toString(),
     mimeType,
@@ -86,9 +100,49 @@ async function importReferenceImage(
     height: dimensions.height ?? 0,
     sizeBytes: targetStats.size,
     createdAt: now,
+    source: { type: "local", sourcePath },
   };
 
   return { image, sourcePath };
+}
+
+export async function importReferenceImageFromBuffer({
+  projectId,
+  fileName,
+  buffer,
+  mimeType,
+  source,
+  sourcePath,
+}: ReferenceImageBufferInput): Promise<ImportedReferenceImage> {
+  const content = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const extension = extensionFromMimeType(mimeType);
+  const id = randomUUID();
+  const fileHash = createHash("sha1").update(content).digest("hex").slice(0, 12);
+  const targetName = `${id}-${fileHash}${extension}`;
+  const targetDir = assetsDir(projectId);
+  const targetPath = join(targetDir, targetName);
+
+  await mkdir(targetDir, { recursive: true });
+  await writeFile(targetPath, content);
+
+  const dimensions = imageSize(targetPath);
+  const targetStats = await stat(targetPath);
+  const now = new Date().toISOString();
+  const image: ReferenceImage = {
+    id,
+    projectId,
+    fileName: sanitizeFileName(fileName) || targetName,
+    filePath: targetPath,
+    fileUrl: pathToFileURL(targetPath).toString(),
+    mimeType,
+    width: dimensions.width ?? 0,
+    height: dimensions.height ?? 0,
+    sizeBytes: targetStats.size,
+    createdAt: now,
+    source,
+  };
+
+  return { image, sourcePath: sourcePath ?? targetPath };
 }
 
 function assetsDir(projectId: string): string {
@@ -106,4 +160,25 @@ function mimeTypeFromExtension(extension: string): ReferenceImage["mimeType"] {
     return "image/webp";
   }
   throw new Error(`Unsupported image format: ${extension}`);
+}
+
+function extensionFromMimeType(mimeType: ReferenceImage["mimeType"]): string {
+  if (mimeType === "image/png") {
+    return ".png";
+  }
+  if (mimeType === "image/jpeg") {
+    return ".jpg";
+  }
+  if (mimeType === "image/webp") {
+    return ".webp";
+  }
+  throw new Error(`Unsupported image mime type: ${mimeType}`);
+}
+
+function sanitizeFileName(fileName: string): string {
+  return fileName
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140);
 }

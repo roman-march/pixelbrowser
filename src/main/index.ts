@@ -11,9 +11,23 @@ import type {
   BrowserOverlayState,
   BrowserViewConfig,
   BrowserViewport,
+  FigmaFileRequest,
+  FigmaFramesRequest,
+  FigmaImportFrameRequest,
   UpdateStatus,
 } from "../shared/types";
 import { readAppData, writeAppData } from "./app-data/app-data";
+import {
+  getFigmaFile,
+  importFigmaFrame,
+  listFigmaFrames,
+} from "./figma/figma";
+import {
+  connectFigma,
+  disconnectFigma,
+  getFigmaAccessToken,
+  getFigmaAuthStatus,
+} from "./figma/oauth";
 import { overlayHtml } from "./overlay/overlay-html";
 import {
   selectReferenceImage,
@@ -44,8 +58,8 @@ type BrowserPaneRuntime = {
   config: BrowserPaneConfig | null;
 };
 
-// Avoid macOS Keychain prompts from Chromium safe storage in local/ad-hoc builds.
-if (process.platform === "darwin") {
+// Avoid macOS Keychain prompts from Chromium safe storage only in local builds.
+if (process.platform === "darwin" && !app.isPackaged) {
   app.commandLine.appendSwitch("use-mock-keychain");
 }
 
@@ -142,6 +156,30 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("reference-images:select", async (_event, projectId: string) => {
     return selectReferenceImages(mainWindow, projectId);
+  });
+
+  ipcMain.handle("figma:auth-status", async () => {
+    return getFigmaAuthStatus();
+  });
+
+  ipcMain.handle("figma:connect", async () => {
+    return connectFigma();
+  });
+
+  ipcMain.handle("figma:disconnect", async () => {
+    return disconnectFigma();
+  });
+
+  ipcMain.handle("figma:file", async (_event, input: FigmaFileRequest) => {
+    return getFigmaFile(input, await getFigmaAccessToken());
+  });
+
+  ipcMain.handle("figma:frames", async (_event, input: FigmaFramesRequest) => {
+    return listFigmaFrames(input, await getFigmaAccessToken());
+  });
+
+  ipcMain.handle("figma:import-frame", async (_event, input: FigmaImportFrameRequest) => {
+    return importFigmaFrame(input, await getFigmaAccessToken());
   });
 
   ipcMain.handle("browser:configure", async (_event, input: BrowserViewConfig) => {

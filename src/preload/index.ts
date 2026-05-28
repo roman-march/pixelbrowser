@@ -15,6 +15,18 @@ const api: PixelPerfectApi = {
     ipcRenderer.invoke("reference-image:select", projectId) as Promise<ImportedReferenceImage | null>,
   selectReferenceImages: (projectId) =>
     ipcRenderer.invoke("reference-images:select", projectId) as Promise<ImportedReferenceImage[]>,
+  getFigmaAuthStatus: () =>
+    ipcRenderer.invoke("figma:auth-status") as ReturnType<PixelPerfectApi["getFigmaAuthStatus"]>,
+  connectFigma: () =>
+    ipcRenderer.invoke("figma:connect") as ReturnType<PixelPerfectApi["connectFigma"]>,
+  disconnectFigma: () =>
+    ipcRenderer.invoke("figma:disconnect") as ReturnType<PixelPerfectApi["disconnectFigma"]>,
+  getFigmaFile: (input) =>
+    ipcRenderer.invoke("figma:file", input) as ReturnType<PixelPerfectApi["getFigmaFile"]>,
+  listFigmaFrames: (input) =>
+    ipcRenderer.invoke("figma:frames", input) as ReturnType<PixelPerfectApi["listFigmaFrames"]>,
+  importFigmaFrame: (input) =>
+    ipcRenderer.invoke("figma:import-frame", input) as ReturnType<PixelPerfectApi["importFigmaFrame"]>,
   configureBrowser: (input: BrowserViewConfig) =>
     ipcRenderer.invoke("browser:configure", input) as Promise<boolean>,
   configureBrowserPanes: (input: BrowserPanesConfig) =>

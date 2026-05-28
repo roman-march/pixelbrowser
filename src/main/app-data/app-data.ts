@@ -2,7 +2,7 @@ import { app } from "electron";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AppData } from "../../shared/types";
+import type { AppData, FigmaSettings } from "../../shared/types";
 import { defaultDiffSettings, defaultOverlaySettings } from "../../shared/types";
 
 export async function readAppData(): Promise<AppData> {
@@ -100,10 +100,26 @@ function createDefaultData(): AppData {
 }
 
 function normalizeAppData(data: AppData): AppData {
-  return {
+  const normalized: AppData = {
     projects: Array.isArray(data.projects) ? data.projects : [],
     pages: Array.isArray(data.pages) ? data.pages : [],
     resolutions: Array.isArray(data.resolutions) ? data.resolutions : [],
     referenceImages: Array.isArray(data.referenceImages) ? data.referenceImages : [],
+  };
+
+  if (data.figma) {
+    normalized.figma = normalizeFigmaSettings(data.figma);
+  }
+
+  return normalized;
+}
+
+function normalizeFigmaSettings(settings: FigmaSettings): FigmaSettings {
+  return {
+    fileUrl: typeof settings.fileUrl === "string" ? settings.fileUrl : "",
+    fileKey: typeof settings.fileKey === "string" ? settings.fileKey : undefined,
+    pageNodeId:
+      typeof settings.pageNodeId === "string" ? settings.pageNodeId : undefined,
+    updatedAt: typeof settings.updatedAt === "string" ? settings.updatedAt : undefined,
   };
 }

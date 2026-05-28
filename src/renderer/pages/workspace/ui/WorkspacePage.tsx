@@ -1,4 +1,5 @@
 import { BreakpointDialog } from "../../../features/breakpoint-management";
+import { FigmaImportDialog } from "../../../features/figma-import";
 import { ControlPanel } from "../../../widgets/control-panel";
 import { BrowserViewport } from "../../../widgets/browser-viewport";
 import { useWorkspacePage } from "../model/useWorkspacePage";
@@ -27,6 +28,7 @@ export function WorkspacePage() {
         onBreakpointImport={workspace.breakpoint.startImport}
         onBreakpointOpenChange={workspace.breakpoint.setSelectOpen}
         onBreakpointSelect={workspace.breakpoint.switchResolution}
+        onFigmaImportOpen={workspace.figma.open}
         onReferenceSelect={workspace.reference.select}
         onResolutionUpdate={workspace.active.updateResolution}
         onUrlDraftChange={workspace.browser.setDraftUrl}
@@ -51,6 +53,24 @@ export function WorkspacePage() {
         onImageFieldChange={workspace.breakpoint.updateDraftImageField}
         onImageRemove={workspace.breakpoint.removeDraftImage}
         onSubmit={workspace.breakpoint.submit}
+      />
+
+      <FigmaImportDialog
+        error={workspace.figma.draft.error}
+        file={workspace.figma.draft.file}
+        fileUrl={workspace.figma.draft.fileUrl}
+        frames={workspace.figma.draft.frames}
+        loading={workspace.figma.draft.loading}
+        open={workspace.figma.draft.open}
+        selectedPageId={workspace.figma.draft.selectedPageId}
+        authStatus={workspace.figma.draft.authStatus}
+        onClose={workspace.figma.close}
+        onConnect={workspace.figma.connect}
+        onDisconnect={workspace.figma.disconnect}
+        onFileLoad={workspace.figma.loadFile}
+        onFileUrlChange={workspace.figma.updateFileUrl}
+        onFrameImport={workspace.figma.importFrame}
+        onPageSelect={workspace.figma.selectPage}
       />
     </main>
   );

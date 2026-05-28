@@ -2,10 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type {
   AppData,
+  FigmaAuthStatus,
+  FigmaFileSummary,
+  FigmaFrameSummary,
   ImportedReferenceImage,
   ProjectPage,
   ResolutionPreset,
 } from "../../../../shared/types";
+import type { FigmaImportLoadingState } from "../../../features/figma-import";
 import { defaultDiffSettings, defaultOverlaySettings } from "../../../../shared/types";
 import {
   buildBreakpointDraft,
@@ -26,12 +30,40 @@ import {
 } from "../../../entities/project";
 import { useOutsideClick } from "../../../shared/lib/use-outside-click";
 
+type FigmaDraft = {
+  error: string | null;
+  file: FigmaFileSummary | null;
+  fileUrl: string;
+  frames: FigmaFrameSummary[];
+  loading: FigmaImportLoadingState;
+  open: boolean;
+  selectedPageId: string;
+  authStatus: FigmaAuthStatus;
+};
+
+function createEmptyFigmaDraft(): FigmaDraft {
+  return {
+    error: null,
+    file: null,
+    fileUrl: "",
+    frames: [],
+    loading: "idle",
+    open: false,
+    selectedPageId: "",
+    authStatus: {
+      configured: false,
+      connected: false,
+    },
+  };
+}
+
 export function useWorkspacePage() {
   const [data, setData] = useState<AppData | null>(null);
   const [urlDraft, setUrlDraft] = useState("http://localhost:3000");
   const [browserUrl, setBrowserUrl] = useState("http://localhost:3000");
   const [breakpointSelectOpen, setBreakpointSelectOpen] = useState(false);
   const [breakpointDraft, setBreakpointDraft] = useState(emptyBreakpointDraft);
+  const [figmaDraft, setFigmaDraft] = useState(createEmptyFigmaDraft);
   const breakpointPickerRef = useOutsideClick<HTMLDivElement>(
     breakpointSelectOpen,
     () => setBreakpointSelectOpen(false),
@@ -40,12 +72,19 @@ export function useWorkspacePage() {
   useEffect(() => {
     let mounted = true;
 
-    window.pixelPerfect.getAppData().then((initialData) => {
+    Promise.all([
+      window.pixelPerfect.getAppData(),
+      window.pixelPerfect.getFigmaAuthStatus(),
+    ]).then(([initialData, figmaAuthStatus]) => {
       if (!mounted) {
         return;
       }
 
       setData(initialData);
+      setFigmaDraft((draft) => ({
+        ...draft,
+        authStatus: figmaAuthStatus,
+      }));
       const project = initialData.projects[0];
       if (project) {
         const initialUrl = project.lastUrl || project.startUrl;
@@ -140,6 +179,269 @@ export function useWorkspacePage() {
             }
           : resolution,
       ),
+    });
+  }
+
+  function openFigmaImport() {
+    const saved = data?.figma;
+    setFigmaDraft((draft) => ({
+      ...draft,
+      error: null,
+      file: null,
+      frames: [],
+      loading: "idle",
+      open: true,
+      selectedPageId: saved?.pageNodeId ?? draft.selectedPageId,
+      fileUrl: saved?.fileUrl || draft.fileUrl,
+    }));
+    void refreshFigmaAuthStatus();
+  }
+
+  function closeFigmaImport() {
+    setFigmaDraft((draft) => ({
+      ...draft,
+      error: null,
+      loading: "idle",
+      open: false,
+    }));
+  }
+
+  function updateFigmaFileUrl(fileUrl: string) {
+    setFigmaDraft((draft) => ({
+      ...draft,
+      error: null,
+      file: null,
+      fileUrl,
+      frames: [],
+      selectedPageId: "",
+    }));
+  }
+
+  async function refreshFigmaAuthStatus() {
+    const authStatus = await window.pixelPerfect.getFigmaAuthStatus();
+    setFigmaDraft((draft) => ({ ...draft, authStatus }));
+    return authStatus;
+  }
+
+  async function connectFigma() {
+    setFigmaDraft((draft) => ({ ...draft, error: null, loading: "connect" }));
+    try {
+      const authStatus = await window.pixelPerfect.connectFigma();
+      setFigmaDraft((draft) => ({
+        ...draft,
+        authStatus,
+        error: authStatus.connected ? null : authStatus.reason ?? "Figma connection failed.",
+        loading: "idle",
+      }));
+    } catch (error) {
+      const authStatus = await refreshFigmaAuthStatus();
+      setFigmaDraft((draft) => ({
+        ...draft,
+        authStatus,
+        error: errorMessage(error),
+        loading: "idle",
+      }));
+    }
+  }
+
+  async function disconnectFigma() {
+    setFigmaDraft((draft) => ({ ...draft, error: null, loading: "connect" }));
+    try {
+      const authStatus = await window.pixelPerfect.disconnectFigma();
+      setFigmaDraft((draft) => ({
+        ...draft,
+        authStatus,
+        file: null,
+        frames: [],
+        loading: "idle",
+        selectedPageId: "",
+      }));
+    } catch (error) {
+      setFigmaDraft((draft) => ({
+        ...draft,
+        error: errorMessage(error),
+        loading: "idle",
+      }));
+    }
+  }
+
+  async function loadFigmaFile() {
+    const fileUrl = figmaDraft.fileUrl.trim();
+
+    setFigmaDraft((draft) => ({ ...draft, error: null, loading: "file" }));
+    try {
+      const authStatus = await refreshFigmaAuthStatus();
+      if (!authStatus.connected) {
+        throw new Error(authStatus.reason ?? "Connect Figma before loading a file.");
+      }
+
+      const file = await window.pixelPerfect.getFigmaFile({ fileUrl });
+      const savedPageId = data?.figma?.pageNodeId;
+      const selectedPageId =
+        (savedPageId && file.pages.some((page) => page.id === savedPageId)
+          ? savedPageId
+          : file.pages[0]?.id) ?? "";
+
+      await saveFigmaSettings({
+        fileKey: file.fileKey,
+        fileUrl,
+        pageNodeId: selectedPageId,
+      });
+
+      setFigmaDraft((draft) => ({
+        ...draft,
+        error: null,
+        file,
+        frames: [],
+        loading: selectedPageId ? "frames" : "idle",
+        selectedPageId,
+      }));
+
+      if (selectedPageId) {
+        await loadFigmaFrames(file, selectedPageId, fileUrl);
+      }
+    } catch (error) {
+      setFigmaDraft((draft) => ({
+        ...draft,
+        error: errorMessage(error),
+        loading: "idle",
+      }));
+    }
+  }
+
+  async function selectFigmaPage(pageNodeId: string) {
+    if (!figmaDraft.file) {
+      return;
+    }
+
+    await loadFigmaFrames(
+      figmaDraft.file,
+      pageNodeId,
+      figmaDraft.fileUrl.trim(),
+    );
+  }
+
+  async function loadFigmaFrames(
+    file: FigmaFileSummary,
+    pageNodeId: string,
+    fileUrl: string,
+  ) {
+    setFigmaDraft((draft) => ({
+      ...draft,
+      error: null,
+      frames: [],
+      loading: "frames",
+      selectedPageId: pageNodeId,
+    }));
+
+    try {
+      const frames = await window.pixelPerfect.listFigmaFrames({
+        fileKey: file.fileKey,
+        pageNodeId,
+      });
+
+      await saveFigmaSettings({
+        fileKey: file.fileKey,
+        fileUrl,
+        pageNodeId,
+      });
+
+      setFigmaDraft((draft) => ({
+        ...draft,
+        error: null,
+        frames,
+        loading: "idle",
+      }));
+    } catch (error) {
+      setFigmaDraft((draft) => ({
+        ...draft,
+        error: errorMessage(error),
+        loading: "idle",
+      }));
+    }
+  }
+
+  async function importFigmaFrame(frame: FigmaFrameSummary) {
+    if (!data || !active.project || !active.resolution || !figmaDraft.file) {
+      return;
+    }
+
+    const file = figmaDraft.file;
+    const selectedPage = file.pages.find((page) => page.id === figmaDraft.selectedPageId);
+    if (!selectedPage) {
+      return;
+    }
+
+    setFigmaDraft((draft) => ({ ...draft, error: null, loading: "import" }));
+    try {
+      const result = await window.pixelPerfect.importFigmaFrame({
+        projectId: active.project.id,
+        fileKey: file.fileKey,
+        fileName: file.fileName,
+        fileVersion: file.fileVersion,
+        pageNodeId: selectedPage.id,
+        pageName: selectedPage.name,
+        frameNodeId: frame.id,
+        frameName: frame.name,
+        scale: 1,
+      });
+      const now = new Date().toISOString();
+
+      await persist({
+        ...data,
+        figma: {
+          fileUrl: figmaDraft.fileUrl.trim(),
+          fileKey: file.fileKey,
+          pageNodeId: selectedPage.id,
+          updatedAt: now,
+        },
+        referenceImages: [
+          ...data.referenceImages.filter((image) => image.id !== result.image.id),
+          result.image,
+        ],
+        resolutions: data.resolutions.map((resolution) =>
+          resolution.id === active.resolution?.id
+            ? {
+                ...resolution,
+                referenceImageId: result.image.id,
+                updatedAt: now,
+              }
+            : resolution,
+        ),
+      });
+
+      setFigmaDraft((draft) => ({
+        ...draft,
+        error: null,
+        loading: "idle",
+        open: false,
+      }));
+    } catch (error) {
+      setFigmaDraft((draft) => ({
+        ...draft,
+        error: errorMessage(error),
+        loading: "idle",
+      }));
+    }
+  }
+
+  async function saveFigmaSettings(settings: {
+    fileKey: string;
+    fileUrl: string;
+    pageNodeId: string;
+  }) {
+    if (!data) {
+      return;
+    }
+
+    await persist({
+      ...data,
+      figma: {
+        fileUrl: settings.fileUrl,
+        fileKey: settings.fileKey,
+        pageNodeId: settings.pageNodeId,
+        updatedAt: new Date().toISOString(),
+      },
     });
   }
 
@@ -287,7 +589,8 @@ export function useWorkspacePage() {
   const partition = active.project
     ? `persist:pixel-perfect-${active.project.id}`
     : "";
-  const browserVisible = !breakpointSelectOpen && !breakpointDraft.open;
+  const browserVisible =
+    !breakpointSelectOpen && !breakpointDraft.open && !figmaDraft.open;
 
   return {
     ready,
@@ -325,8 +628,23 @@ export function useWorkspacePage() {
       updateDraftField,
       updateDraftImageField,
     },
+    figma: {
+      close: closeFigmaImport,
+      connect: connectFigma,
+      disconnect: disconnectFigma,
+      draft: figmaDraft,
+      importFrame: importFigmaFrame,
+      loadFile: loadFigmaFile,
+      open: openFigmaImport,
+      selectPage: selectFigmaPage,
+      updateFileUrl: updateFigmaFileUrl,
+    },
     reference: {
       select: selectReferenceImage,
     },
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Figma import failed.";
 }
