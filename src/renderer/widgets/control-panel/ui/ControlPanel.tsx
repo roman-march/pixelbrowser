@@ -6,7 +6,10 @@ import type {
   ReferenceImage,
   ResolutionPreset,
 } from "../../../../shared/types";
-import { BrowserNavigationControls, UrlNavigationForm } from "../../../features/browser-navigation";
+import {
+  BrowserNavigationControls,
+  UrlNavigationForm,
+} from "../../../features/browser-navigation";
 import { BreakpointPicker } from "../../../features/breakpoint-management";
 import { OverlayControls } from "../../../features/overlay-controls";
 import { ReferenceImageAction } from "../../../features/reference-image";

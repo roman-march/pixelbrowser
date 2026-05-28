@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
+  BrowserOverlayState,
+  BrowserPaneConfig,
   DiffSettings,
   OverlaySettings,
   ReferenceImage,
@@ -58,35 +60,25 @@ export function BrowserViewport({
     }
 
     const rect = frame.getBoundingClientRect();
-    void window.pixelPerfect.configureBrowser({
-      url,
-      partition,
-      visible,
-      bounds: {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: displayWidth,
-        height: displayHeight,
-      },
-      viewport: {
-        width: resolution.width,
-        height: resolution.height,
-        deviceScaleFactor: resolution.deviceScaleFactor,
-        scale,
-      },
-      overlay: {
-        referenceImageUrl: image?.fileUrl ?? null,
-        referenceImageWidth: image?.width ?? 0,
-        referenceImageHeight: image?.height ?? 0,
-        overlayVisible: Boolean(shouldShowOverlay),
-        overlayOpacity: overlay.opacity,
-        overlayBlendMode: overlay.blendMode,
-        overlayOffsetX: overlay.offsetX,
-        overlayOffsetY: overlay.offsetY,
-        overlayScale: overlay.scale,
-        diffVisible: Boolean(shouldShowDiff),
-        diffOpacity: diff.highlightOpacity,
-      },
+    void window.pixelPerfect.configureBrowserPanes({
+      panes: [
+        buildPaneConfig({
+          diff,
+          displayHeight,
+          displayWidth,
+          id: "primary",
+          image,
+          overlay,
+          rect,
+          resolution,
+          scale,
+          partition,
+          url,
+          visible,
+        }),
+      ],
+      primaryPaneId: "primary",
+      maxLivePanes: 1,
     });
   }, [
     url,
@@ -153,4 +145,83 @@ function getViewportScale(hostSize: HostSize, resolution: ResolutionPreset) {
     hostSize.width > 0 ? hostSize.width / resolution.width : 1,
     hostSize.height > 0 ? hostSize.height / resolution.height : 1,
   );
+}
+
+type BuildPaneConfigInput = {
+  diff: DiffSettings;
+  displayHeight: number;
+  displayWidth: number;
+  id: string;
+  image: ReferenceImage | null;
+  overlay: OverlaySettings;
+  partition: string;
+  rect: DOMRect;
+  resolution: ResolutionPreset;
+  scale: number;
+  url: string;
+  visible: boolean;
+};
+
+function buildPaneConfig({
+  diff,
+  displayHeight,
+  displayWidth,
+  id,
+  image,
+  overlay,
+  partition,
+  rect,
+  resolution,
+  scale,
+  url,
+  visible,
+}: BuildPaneConfigInput): BrowserPaneConfig {
+  return {
+    id,
+    url,
+    partition,
+    visible,
+    bounds: {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: displayWidth,
+      height: displayHeight,
+    },
+    viewport: {
+      width: resolution.width,
+      height: resolution.height,
+      deviceScaleFactor: resolution.deviceScaleFactor,
+      scale,
+    },
+    overlay: buildBrowserOverlayState({ diff, image, overlay }),
+  };
+}
+
+type BuildBrowserOverlayStateInput = {
+  diff: DiffSettings;
+  image: ReferenceImage | null;
+  overlay: OverlaySettings;
+};
+
+function buildBrowserOverlayState({
+  diff,
+  image,
+  overlay,
+}: BuildBrowserOverlayStateInput): BrowserOverlayState {
+  const shouldShowOverlay = Boolean(overlay.enabled && overlay.opacity > 0 && image);
+  const shouldShowDiff = Boolean(diff.enabled && diff.highlightOpacity > 0 && image);
+
+  return {
+    referenceImageUrl: image?.fileUrl ?? null,
+    referenceImageWidth: image?.width ?? 0,
+    referenceImageHeight: image?.height ?? 0,
+    overlayVisible: Boolean(shouldShowOverlay),
+    overlayOpacity: overlay.opacity,
+    overlayBlendMode: overlay.blendMode,
+    overlayOffsetX: overlay.offsetX,
+    overlayOffsetY: overlay.offsetY,
+    overlayScale: overlay.scale,
+    diffVisible: Boolean(shouldShowDiff),
+    diffOpacity: diff.highlightOpacity,
+  };
 }

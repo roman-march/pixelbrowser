@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppData,
+  BrowserPanesConfig,
   BrowserViewConfig,
   ImportedReferenceImage,
   PixelPerfectApi,
@@ -16,6 +17,8 @@ const api: PixelPerfectApi = {
     ipcRenderer.invoke("reference-images:select", projectId) as Promise<ImportedReferenceImage[]>,
   configureBrowser: (input: BrowserViewConfig) =>
     ipcRenderer.invoke("browser:configure", input) as Promise<boolean>,
+  configureBrowserPanes: (input: BrowserPanesConfig) =>
+    ipcRenderer.invoke("browser-panes:configure", input) as Promise<boolean>,
   goBack: () => ipcRenderer.invoke("browser:go-back") as Promise<boolean>,
   reload: () => ipcRenderer.invoke("browser:reload") as Promise<boolean>,
   getBrowserPageTitle: () =>

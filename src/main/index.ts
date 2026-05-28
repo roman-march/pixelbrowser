@@ -6,6 +6,8 @@ import electronUpdater from "electron-updater";
 import { join } from "node:path";
 import type {
   AppData,
+  BrowserPaneConfig,
+  BrowserPanesConfig,
   BrowserOverlayState,
   BrowserViewConfig,
   BrowserViewport,
@@ -25,13 +27,22 @@ autoUpdater.logger = log;
 autoUpdater.autoDownload = false;
 
 let mainWindow: BrowserWindow | null = null;
-let browserView: WebContentsView | null = null;
-let browserPartition = "";
-let lastBrowserUrl = "";
-let lastBrowserConfig: BrowserViewConfig | null = null;
+const browserPanes = new Map<string, BrowserPaneRuntime>();
+let primaryPaneId = "primary";
+let lastBrowserPanesConfig: BrowserPanesConfig | null = null;
+let lastEmittedBrowserUrl = "";
 let overlayWindow: BrowserWindow | null = null;
 let overlayReady = false;
-let pendingOverlay: BrowserOverlayRenderState | null = null;
+let pendingOverlay: BrowserOverlayRenderPayload | null = null;
+
+type BrowserPaneRuntime = {
+  id: string;
+  view: WebContentsView;
+  partition: string;
+  lastUrl: string;
+  live: boolean;
+  config: BrowserPaneConfig | null;
+};
 
 // Avoid macOS Keychain prompts from Chromium safe storage in local/ad-hoc builds.
 if (process.platform === "darwin") {
@@ -62,22 +73,26 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
-  mainWindow.on("move", syncOverlayWindowBounds);
-  mainWindow.on("resize", syncOverlayWindowBounds);
+  mainWindow.on("move", syncOverlayWindow);
+  mainWindow.on("resize", syncOverlayWindow);
   mainWindow.on("minimize", () => {
-    browserView?.setVisible(false);
+    for (const pane of browserPanes.values()) {
+      pane.live = false;
+      pane.view.setVisible(false);
+    }
     overlayWindow?.hide();
   });
   mainWindow.on("restore", () => {
-    if (lastBrowserConfig?.visible) {
-      browserView?.setVisible(true);
-      syncOverlayWindow();
+    if (lastBrowserPanesConfig) {
+      configureBrowserPanes(lastBrowserPanesConfig);
     }
   });
   mainWindow.on("closed", () => {
     overlayWindow?.destroy();
     overlayWindow = null;
-    browserView = null;
+    for (const paneId of Array.from(browserPanes.keys())) {
+      destroyPane(paneId);
+    }
     mainWindow = null;
   });
 
@@ -133,6 +148,10 @@ function registerIpcHandlers(): void {
     return configureBrowser(input);
   });
 
+  ipcMain.handle("browser-panes:configure", async (_event, input: BrowserPanesConfig) => {
+    return configureBrowserPanes(input);
+  });
+
   ipcMain.handle("browser:go-back", () => goBack());
 
   ipcMain.handle("browser:reload", () => reloadBrowser());
@@ -147,40 +166,94 @@ function registerIpcHandlers(): void {
 }
 
 type BrowserOverlayRenderState = BrowserOverlayState & {
+  paneId: string;
+  bounds: Rectangle;
   scale: number;
 };
 
+type BrowserOverlayRenderPayload = {
+  panes: BrowserOverlayRenderState[];
+};
+
 function configureBrowser(config: BrowserViewConfig): boolean {
+  return configureBrowserPanes({
+    panes: [{ id: "primary", ...config }],
+    primaryPaneId: "primary",
+    maxLivePanes: 1,
+  });
+}
+
+function configureBrowserPanes(config: BrowserPanesConfig): boolean {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return false;
   }
 
-  lastBrowserConfig = normalizeBrowserConfig(config);
+  lastBrowserPanesConfig = normalizeBrowserPanesConfig(config);
+  primaryPaneId = lastBrowserPanesConfig.primaryPaneId;
 
-  const view = ensureBrowserView(lastBrowserConfig.partition);
-  if (!view) {
-    return false;
+  const activeIds = new Set(lastBrowserPanesConfig.panes.map((pane) => pane.id));
+  const liveIds = selectLivePaneIds(lastBrowserPanesConfig);
+
+  for (const paneConfig of lastBrowserPanesConfig.panes) {
+    const pane = ensurePaneView(paneConfig.id, paneConfig.partition);
+    if (!pane) {
+      continue;
+    }
+
+    const shouldShowLive = paneConfig.visible && liveIds.has(paneConfig.id);
+    pane.config = paneConfig;
+    pane.live = shouldShowLive;
+    pane.view.setBounds(paneConfig.bounds);
+    pane.view.setVisible(shouldShowLive);
+
+    if (!shouldShowLive) {
+      continue;
+    }
+
+    if (paneConfig.url !== pane.lastUrl) {
+      pane.lastUrl = paneConfig.url;
+      pane.view.webContents.loadURL(paneConfig.url).catch((error) => {
+        log.warn("Failed to load browser pane URL", error);
+      });
+    } else {
+      void applyDeviceEmulation(pane.view, paneConfig.viewport);
+    }
   }
 
-  view.setBounds(lastBrowserConfig.bounds);
-  view.setVisible(lastBrowserConfig.visible);
-  if (lastBrowserConfig.visible && lastBrowserConfig.url !== lastBrowserUrl) {
-    lastBrowserUrl = lastBrowserConfig.url;
-    view.webContents.loadURL(lastBrowserConfig.url);
-  } else {
-    void applyDeviceEmulation(view, lastBrowserConfig.viewport);
+  for (const paneId of Array.from(browserPanes.keys())) {
+    if (!activeIds.has(paneId)) {
+      destroyPane(paneId);
+    }
   }
 
   syncOverlayWindow();
   return true;
 }
 
+function normalizeBrowserPanesConfig(config: BrowserPanesConfig): BrowserPanesConfig {
+  const panes = config.panes.map(normalizeBrowserPaneConfig);
+  const primaryExists = panes.some((pane) => pane.id === config.primaryPaneId);
+  return {
+    panes,
+    primaryPaneId: primaryExists ? config.primaryPaneId : panes[0]?.id ?? "primary",
+    maxLivePanes: Math.max(1, Math.floor(config.maxLivePanes || 1)),
+  };
+}
+
+function normalizeBrowserPaneConfig(config: BrowserPaneConfig): BrowserPaneConfig {
+  const id = config.id.trim() || "primary";
+  return {
+    ...normalizeBrowserConfig(config),
+    id,
+  };
+}
+
 function normalizeBrowserConfig(config: BrowserViewConfig): BrowserViewConfig {
   return {
     ...config,
     bounds: {
-      x: Math.max(0, Math.round(config.bounds.x)),
-      y: Math.max(0, Math.round(config.bounds.y)),
+      x: Math.round(config.bounds.x),
+      y: Math.round(config.bounds.y),
       width: Math.max(1, Math.round(config.bounds.width)),
       height: Math.max(1, Math.round(config.bounds.height)),
     },
@@ -195,49 +268,90 @@ function normalizeBrowserConfig(config: BrowserViewConfig): BrowserViewConfig {
   };
 }
 
-function ensureBrowserView(partition: string): WebContentsView | null {
+function selectLivePaneIds(config: BrowserPanesConfig): Set<string> {
+  const visiblePanes = config.panes.filter((pane) => pane.visible);
+  const primaryPane = visiblePanes.find((pane) => pane.id === config.primaryPaneId);
+  const orderedPanes = primaryPane
+    ? [primaryPane, ...visiblePanes.filter((pane) => pane.id !== primaryPane.id)]
+    : visiblePanes;
+  const ids = orderedPanes.slice(0, config.maxLivePanes).map((pane) => pane.id);
+
+  return new Set(ids);
+}
+
+function ensurePaneView(paneId: string, partition: string): BrowserPaneRuntime | null {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return null;
   }
 
-  if (browserView && browserPartition === partition) {
-    return browserView;
+  const existing = browserPanes.get(paneId);
+  if (
+    existing &&
+    existing.partition === partition &&
+    !existing.view.webContents.isDestroyed()
+  ) {
+    return existing;
   }
 
-  if (browserView) {
-    mainWindow.contentView.removeChildView(browserView);
-    browserView.webContents.close({ waitForBeforeUnload: false });
+  if (existing) {
+    destroyPane(paneId);
   }
 
-  browserPartition = partition;
-  lastBrowserUrl = "";
-  browserView = new WebContentsView({
+  const view = new WebContentsView({
     webPreferences: {
       partition,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: true,
     },
   });
-  browserView.setBackgroundColor("#000");
-  browserView.webContents.setWindowOpenHandler(({ url }) => {
+  const pane: BrowserPaneRuntime = {
+    id: paneId,
+    view,
+    partition,
+    lastUrl: "",
+    live: false,
+    config: null,
+  };
+
+  view.setBackgroundColor("#000");
+  view.webContents.setBackgroundThrottling(true);
+  view.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
-  browserView.webContents.on("did-navigate", (_event, url) => {
-    emitBrowserUrl(url);
+  view.webContents.on("did-navigate", (_event, url) => {
+    emitBrowserUrl(paneId, url);
   });
-  browserView.webContents.on("did-navigate-in-page", (_event, url) => {
-    emitBrowserUrl(url);
+  view.webContents.on("did-navigate-in-page", (_event, url) => {
+    emitBrowserUrl(paneId, url);
   });
-  browserView.webContents.on("dom-ready", () => {
-    if (lastBrowserConfig) {
-      void applyDeviceEmulation(browserView!, lastBrowserConfig.viewport);
+  view.webContents.on("dom-ready", () => {
+    const currentPane = browserPanes.get(paneId);
+    if (currentPane?.config) {
+      void applyDeviceEmulation(view, currentPane.config.viewport);
     }
   });
 
-  mainWindow.contentView.addChildView(browserView);
-  return browserView;
+  mainWindow.contentView.addChildView(view);
+  browserPanes.set(paneId, pane);
+  return pane;
+}
+
+function destroyPane(paneId: string): void {
+  const pane = browserPanes.get(paneId);
+  if (!pane) {
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.contentView.removeChildView(pane.view);
+  }
+  if (!pane.view.webContents.isDestroyed()) {
+    pane.view.webContents.close({ waitForBeforeUnload: false });
+  }
+  browserPanes.delete(paneId);
 }
 
 async function applyDeviceEmulation(
@@ -300,8 +414,15 @@ async function clearDeviceEmulation(view: WebContentsView): Promise<void> {
   }
 }
 
-function emitBrowserUrl(url: string): void {
-  lastBrowserUrl = url;
+function emitBrowserUrl(paneId: string, url: string): void {
+  const pane = browserPanes.get(paneId);
+  if (pane) {
+    pane.lastUrl = url;
+  }
+  if (url === lastEmittedBrowserUrl) {
+    return;
+  }
+  lastEmittedBrowserUrl = url;
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
@@ -309,7 +430,7 @@ function emitBrowserUrl(url: string): void {
 }
 
 function goBack(): boolean {
-  const contents = browserView?.webContents;
+  const contents = getPrimaryPane()?.view.webContents;
   if (!contents || contents.isDestroyed() || !contents.canGoBack()) {
     return false;
   }
@@ -319,37 +440,49 @@ function goBack(): boolean {
 }
 
 function reloadBrowser(): boolean {
-  const contents = browserView?.webContents;
-  if (!contents || contents.isDestroyed()) {
-    return false;
+  const livePanes = Array.from(browserPanes.values()).filter(
+    (pane) => pane.live && !pane.view.webContents.isDestroyed(),
+  );
+  const panesToReload =
+    livePanes.length > 0 ? livePanes : [getPrimaryPane()].filter(Boolean);
+
+  for (const pane of panesToReload) {
+    pane?.view.webContents.reload();
   }
 
-  contents.reload();
-  return true;
+  return panesToReload.length > 0;
 }
 
 function getBrowserPageTitle(): string {
-  const title = browserView?.webContents.isDestroyed()
+  const contents = getPrimaryPane()?.view.webContents;
+  const title = contents?.isDestroyed()
     ? ""
-    : browserView?.webContents.getTitle().trim();
+    : contents?.getTitle().trim();
   return title || "";
 }
 
+function getPrimaryPane(): BrowserPaneRuntime | null {
+  return (
+    browserPanes.get(primaryPaneId) ??
+    Array.from(browserPanes.values()).find((pane) => pane.config?.visible) ??
+    Array.from(browserPanes.values())[0] ??
+    null
+  );
+}
+
 function syncOverlayWindow(): void {
-  if (!lastBrowserConfig || !mainWindow || mainWindow.isDestroyed()) {
+  if (!lastBrowserPanesConfig || !mainWindow || mainWindow.isDestroyed()) {
     overlayWindow?.hide();
     return;
   }
 
-  const overlay = buildOverlayRenderState(lastBrowserConfig);
-  const shouldShow =
-    lastBrowserConfig.visible && (overlay.overlayVisible || overlay.diffVisible);
-  if (!shouldShow) {
+  const overlay = buildOverlayRenderPayload(lastBrowserPanesConfig);
+  if (overlay.panes.length === 0) {
     overlayWindow?.hide();
     return;
   }
 
-  const overlayBounds = getOverlayWindowBounds(lastBrowserConfig.bounds);
+  const overlayBounds = getOverlayWindowBounds(overlay.panes.map((pane) => pane.bounds));
   if (!overlayBounds) {
     overlayWindow?.hide();
     return;
@@ -360,45 +493,83 @@ function syncOverlayWindow(): void {
     return;
   }
 
+  const contentBounds = mainWindow.getContentBounds();
+  const relativeOverlay: BrowserOverlayRenderPayload = {
+    panes: overlay.panes.map((pane) => ({
+      ...pane,
+      bounds: {
+        x: pane.bounds.x - (overlayBounds.x - contentBounds.x),
+        y: pane.bounds.y - (overlayBounds.y - contentBounds.y),
+        width: pane.bounds.width,
+        height: pane.bounds.height,
+      },
+    })),
+  };
+
   win.setBounds(overlayBounds, false);
-  pendingOverlay = overlay;
+  pendingOverlay = relativeOverlay;
   if (overlayReady) {
-    renderOverlay(overlay);
+    renderOverlay(relativeOverlay);
   }
   if (!win.isVisible()) {
     win.showInactive();
   }
 }
 
-function syncOverlayWindowBounds(): void {
-  if (!lastBrowserConfig || !overlayWindow?.isVisible()) {
-    return;
-  }
-
-  const overlayBounds = getOverlayWindowBounds(lastBrowserConfig.bounds);
-  if (overlayBounds) {
-    overlayWindow.setBounds(overlayBounds, false);
-  }
-}
-
-function getOverlayWindowBounds(bounds: Rectangle): Rectangle | null {
+function getOverlayWindowBounds(bounds: Rectangle[]): Rectangle | null {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return null;
   }
+  const first = bounds[0];
+  if (!first) {
+    return null;
+  }
+
+  const union = bounds.slice(1).reduce(
+    (rect, item) => {
+      const x1 = Math.min(rect.x, item.x);
+      const y1 = Math.min(rect.y, item.y);
+      const x2 = Math.max(rect.x + rect.width, item.x + item.width);
+      const y2 = Math.max(rect.y + rect.height, item.y + item.height);
+      return {
+        x: x1,
+        y: y1,
+        width: x2 - x1,
+        height: y2 - y1,
+      };
+    },
+    { ...first },
+  );
 
   const contentBounds = mainWindow.getContentBounds();
   return {
-    x: contentBounds.x + bounds.x,
-    y: contentBounds.y + bounds.y,
-    width: bounds.width,
-    height: bounds.height,
+    x: contentBounds.x + union.x,
+    y: contentBounds.y + union.y,
+    width: union.width,
+    height: union.height,
   };
 }
 
-function buildOverlayRenderState(config: BrowserViewConfig): BrowserOverlayRenderState {
+function buildOverlayRenderPayload(config: BrowserPanesConfig): BrowserOverlayRenderPayload {
+  const liveIds = selectLivePaneIds(config);
   return {
-    ...config.overlay,
-    scale: config.viewport.scale,
+    panes: config.panes.flatMap((pane) => {
+      const shouldShow =
+        pane.visible &&
+        liveIds.has(pane.id) &&
+        (pane.overlay.overlayVisible || pane.overlay.diffVisible);
+
+      if (!shouldShow) {
+        return [];
+      }
+
+      return {
+        ...pane.overlay,
+        paneId: pane.id,
+        bounds: pane.bounds,
+        scale: pane.viewport.scale,
+      };
+    }),
   };
 }
 
@@ -448,7 +619,7 @@ function ensureOverlayWindow(): BrowserWindow | null {
   return overlayWindow;
 }
 
-function renderOverlay(state: BrowserOverlayRenderState): void {
+function renderOverlay(state: BrowserOverlayRenderPayload): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) {
     return;
   }

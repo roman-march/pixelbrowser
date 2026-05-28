@@ -128,12 +128,23 @@ export type BrowserViewConfig = {
   overlay: BrowserOverlayState;
 };
 
+export type BrowserPaneConfig = BrowserViewConfig & {
+  id: string;
+};
+
+export type BrowserPanesConfig = {
+  panes: BrowserPaneConfig[];
+  primaryPaneId: string;
+  maxLivePanes: number;
+};
+
 export type PixelPerfectApi = {
   getAppData(): Promise<AppData>;
   saveAppData(data: AppData): Promise<AppData>;
   selectReferenceImage(projectId: string): Promise<ImportedReferenceImage | null>;
   selectReferenceImages(projectId: string): Promise<ImportedReferenceImage[]>;
   configureBrowser(input: BrowserViewConfig): Promise<boolean>;
+  configureBrowserPanes(input: BrowserPanesConfig): Promise<boolean>;
   goBack(): Promise<boolean>;
   reload(): Promise<boolean>;
   getBrowserPageTitle(): Promise<string>;
