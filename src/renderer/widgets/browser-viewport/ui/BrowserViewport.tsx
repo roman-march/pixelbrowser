@@ -120,7 +120,11 @@ export function BrowserViewport({
   ]);
 
   return (
-    <section ref={hostRef} className="viewport-host">
+    <section
+      ref={hostRef}
+      className="viewport-host"
+      data-fit-mode={viewportSize.fitMode}
+    >
       <div
         ref={frameRef}
         className="viewport-frame"
@@ -149,17 +153,19 @@ type HostSize = {
 };
 
 function getViewportSize(hostSize: HostSize, resolution: ResolutionPreset) {
-  const rawScale = Math.min(
-    1,
-    hostSize.width > 0 ? hostSize.width / resolution.width : 1,
-    hostSize.height > 0 ? hostSize.height / resolution.height : 1,
-  );
-  const displayWidth = Math.max(1, Math.round(resolution.width * rawScale));
-  const displayHeight = Math.max(1, Math.round(resolution.height * rawScale));
+  const fitMode = resolution.height > resolution.width ? "height" : "width";
+  const rawScale =
+    fitMode === "height"
+      ? hostSize.height / resolution.height
+      : hostSize.width / resolution.width;
+  const scale = Number.isFinite(rawScale) && rawScale > 0 ? rawScale : 1;
+  const displayWidth = Math.max(1, Math.round(resolution.width * scale));
+  const displayHeight = Math.max(1, Math.round(resolution.height * scale));
 
   return {
     displayWidth,
     displayHeight,
+    fitMode,
     scale: getEmulationScale({
       displayHeight,
       displayWidth,
@@ -177,16 +183,10 @@ function getEmulationScale({
   displayWidth: number;
   resolution: ResolutionPreset;
 }) {
-  const coverScale = Math.max(
+  return Math.max(
     displayWidth / resolution.width,
     displayHeight / resolution.height,
   );
-
-  if (coverScale >= 1) {
-    return 1;
-  }
-
-  return coverScale;
 }
 
 type BuildPaneConfigInput = {
