@@ -1,4 +1,4 @@
-import { FolderOpen, ImagePlus } from "lucide-react";
+import { ImagePlus } from "lucide-react";
 import type { ReferenceImage } from "../../../../shared/types";
 import { IconButton } from "../../../shared/ui/icon-button";
 
@@ -12,8 +12,8 @@ export function ReferenceImageAction({
   onSelect,
 }: ReferenceImageActionProps) {
   return (
-    <IconButton title="Select reference image" onClick={onSelect}>
-      {image ? <ImagePlus /> : <FolderOpen />}
+    <IconButton title={image ? "Replace image" : "Add image"} onClick={onSelect}>
+      <ImagePlus />
     </IconButton>
   );
 }

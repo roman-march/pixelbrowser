@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type {
   AppData,
   BrowserPaneConfig,
+  BrowserPaneOverlaysConfig,
   BrowserPanesConfig,
   BrowserOverlayState,
   BrowserViewConfig,
@@ -15,6 +16,7 @@ import type {
   FigmaFramesRequest,
   FigmaImportFrameRequest,
   UpdateStatus,
+  WindowChromeState,
 } from "../shared/types";
 import { readAppData, writeAppData } from "./app-data/app-data";
 import {
@@ -35,6 +37,7 @@ import {
 } from "./reference-images/reference-images";
 
 const { autoUpdater } = electronUpdater;
+const macTrafficLightPosition = { x: 20, y: 18 };
 
 log.initialize();
 autoUpdater.logger = log;
@@ -45,7 +48,7 @@ const browserPanes = new Map<string, BrowserPaneRuntime>();
 let primaryPaneId = "primary";
 let lastBrowserPanesConfig: BrowserPanesConfig | null = null;
 let lastEmittedBrowserUrl = "";
-let overlayWindow: BrowserWindow | null = null;
+let overlayView: WebContentsView | null = null;
 let overlayReady = false;
 let pendingOverlay: BrowserOverlayRenderPayload | null = null;
 
@@ -56,24 +59,28 @@ type BrowserPaneRuntime = {
   lastUrl: string;
   live: boolean;
   config: BrowserPaneConfig | null;
+  appliedViewport: BrowserViewport | null;
 };
 
-// Avoid macOS Keychain prompts from Chromium safe storage only in local builds.
-if (process.platform === "darwin" && !app.isPackaged) {
+// Avoid macOS Keychain prompts from Chromium/Electron Safe Storage.
+if (process.platform === "darwin") {
   app.commandLine.appendSwitch("use-mock-keychain");
 }
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 960,
+    width: 1512,
+    height: 982,
     minWidth: 980,
     minHeight: 680,
     title: "Pixel Perfect Dev Browser",
-    backgroundColor: "#090b0f",
+    backgroundColor: "#1e1e1e",
     show: true,
     hasShadow: process.platform !== "darwin",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    ...(process.platform === "darwin"
+      ? { trafficLightPosition: macTrafficLightPosition }
+      : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       contextIsolation: true,
@@ -87,14 +94,15 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
-  mainWindow.on("move", syncOverlayWindow);
-  mainWindow.on("resize", syncOverlayWindow);
+  mainWindow.on("resize", syncOverlayView);
+  mainWindow.on("enter-full-screen", emitWindowChromeState);
+  mainWindow.on("leave-full-screen", emitWindowChromeState);
   mainWindow.on("minimize", () => {
     for (const pane of browserPanes.values()) {
       pane.live = false;
       pane.view.setVisible(false);
     }
-    overlayWindow?.hide();
+    hideOverlayView();
   });
   mainWindow.on("restore", () => {
     if (lastBrowserPanesConfig) {
@@ -102,8 +110,7 @@ function createWindow(): void {
     }
   });
   mainWindow.on("closed", () => {
-    overlayWindow?.destroy();
-    overlayWindow = null;
+    destroyOverlayView();
     for (const paneId of Array.from(browserPanes.keys())) {
       destroyPane(paneId);
     }
@@ -190,17 +197,44 @@ function registerIpcHandlers(): void {
     return configureBrowserPanes(input);
   });
 
+  ipcMain.handle(
+    "browser-panes:update-overlays",
+    async (_event, input: BrowserPaneOverlaysConfig) => {
+      return updateBrowserPaneOverlays(input);
+    },
+  );
+
   ipcMain.handle("browser:go-back", () => goBack());
 
   ipcMain.handle("browser:reload", () => reloadBrowser());
 
   ipcMain.handle("browser:get-page-title", () => getBrowserPageTitle());
 
+  ipcMain.handle("window:get-chrome-state", () => getWindowChromeState());
+
   ipcMain.handle("app:get-version", () => app.getVersion());
 
   ipcMain.handle("updates:check", async () => {
     return checkForUpdates();
   });
+}
+
+function getWindowChromeState(): WindowChromeState {
+  return {
+    platform: process.platform,
+    mode: mainWindow?.isFullScreen() ? "fullscreen" : "window",
+  };
+}
+
+function emitWindowChromeState(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  mainWindow.webContents.send(
+    "window:chrome-state-changed",
+    getWindowChromeState(),
+  );
 }
 
 type BrowserOverlayRenderState = BrowserOverlayState & {
@@ -248,13 +282,13 @@ function configureBrowserPanes(config: BrowserPanesConfig): boolean {
       continue;
     }
 
+    applyPaneDeviceEmulation(pane);
+
     if (paneConfig.url !== pane.lastUrl) {
       pane.lastUrl = paneConfig.url;
       pane.view.webContents.loadURL(paneConfig.url).catch((error) => {
         log.warn("Failed to load browser pane URL", error);
       });
-    } else {
-      void applyDeviceEmulation(pane.view, paneConfig.viewport);
     }
   }
 
@@ -264,7 +298,47 @@ function configureBrowserPanes(config: BrowserPanesConfig): boolean {
     }
   }
 
-  syncOverlayWindow();
+  syncOverlayView();
+  return true;
+}
+
+function updateBrowserPaneOverlays(config: BrowserPaneOverlaysConfig): boolean {
+  if (!lastBrowserPanesConfig || !mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+
+  const overlays = new Map(
+    config.panes.map((pane) => [pane.id.trim() || "primary", pane.overlay]),
+  );
+  let changed = false;
+
+  const panes = lastBrowserPanesConfig.panes.map((pane) => {
+    const overlay = overlays.get(pane.id);
+    if (!overlay) {
+      return pane;
+    }
+
+    changed = true;
+    const nextPane = {
+      ...pane,
+      overlay,
+    };
+    const runtime = browserPanes.get(pane.id);
+    if (runtime?.config) {
+      runtime.config = nextPane;
+    }
+    return nextPane;
+  });
+
+  if (!changed) {
+    return false;
+  }
+
+  lastBrowserPanesConfig = {
+    ...lastBrowserPanesConfig,
+    panes,
+  };
+  syncOverlayView();
   return true;
 }
 
@@ -351,6 +425,7 @@ function ensurePaneView(paneId: string, partition: string): BrowserPaneRuntime |
     lastUrl: "",
     live: false,
     config: null,
+    appliedViewport: null,
   };
 
   view.setBackgroundColor("#000");
@@ -365,10 +440,16 @@ function ensurePaneView(paneId: string, partition: string): BrowserPaneRuntime |
   view.webContents.on("did-navigate-in-page", (_event, url) => {
     emitBrowserUrl(paneId, url);
   });
+  view.webContents.on("did-start-loading", () => {
+    const currentPane = browserPanes.get(paneId);
+    if (currentPane?.config) {
+      applyPaneDeviceEmulation(currentPane);
+    }
+  });
   view.webContents.on("dom-ready", () => {
     const currentPane = browserPanes.get(paneId);
     if (currentPane?.config) {
-      void applyDeviceEmulation(view, currentPane.config.viewport);
+      applyPaneDeviceEmulation(currentPane);
     }
   });
 
@@ -392,38 +473,52 @@ function destroyPane(paneId: string): void {
   browserPanes.delete(paneId);
 }
 
-async function applyDeviceEmulation(
+function applyPaneDeviceEmulation(pane: BrowserPaneRuntime): void {
+  if (!pane.live || !pane.config || pane.view.webContents.isDestroyed()) {
+    return;
+  }
+
+  if (browserViewportsEqual(pane.appliedViewport, pane.config.viewport)) {
+    return;
+  }
+
+  const webContents = pane.view.webContents;
+  if (!webContents.getURL() && !webContents.isLoading()) {
+    return;
+  }
+
+  applyDeviceEmulation(pane.view, pane.config.viewport);
+  pane.appliedViewport = { ...pane.config.viewport };
+}
+
+function applyDeviceEmulation(
   view: WebContentsView,
   viewport: BrowserViewport,
-): Promise<void> {
+): void {
   if (view.webContents.isDestroyed()) {
     return;
   }
 
   if (!needsDeviceEmulation(viewport)) {
-    await clearDeviceEmulation(view);
+    clearDeviceEmulation(view);
     return;
   }
 
   try {
-    if (!view.webContents.debugger.isAttached()) {
-      view.webContents.debugger.attach("1.3");
-    }
-
-    await view.webContents.debugger.sendCommand(
-      "Emulation.setDeviceMetricsOverride",
-      {
+    view.webContents.enableDeviceEmulation({
+      screenPosition: "desktop",
+      screenSize: {
         width: viewport.width,
         height: viewport.height,
-        deviceScaleFactor: viewport.deviceScaleFactor,
-        mobile: false,
-        scale: viewport.scale,
-        screenWidth: viewport.width,
-        screenHeight: viewport.height,
-        positionX: 0,
-        positionY: 0,
       },
-    );
+      viewSize: {
+        width: viewport.width,
+        height: viewport.height,
+      },
+      viewPosition: { x: 0, y: 0 },
+      deviceScaleFactor: viewport.deviceScaleFactor,
+      scale: viewport.scale,
+    });
   } catch (error) {
     log.warn("Failed to apply browser viewport emulation", error);
   }
@@ -433,22 +528,24 @@ function needsDeviceEmulation(viewport: BrowserViewport): boolean {
   return viewport.scale !== 1 || viewport.deviceScaleFactor !== 1;
 }
 
-async function clearDeviceEmulation(view: WebContentsView): Promise<void> {
-  const browserDebugger = view.webContents.debugger;
-  if (!browserDebugger.isAttached()) {
-    return;
-  }
+function browserViewportsEqual(
+  first: BrowserViewport | null,
+  second: BrowserViewport,
+): boolean {
+  return Boolean(
+    first &&
+      first.width === second.width &&
+      first.height === second.height &&
+      first.deviceScaleFactor === second.deviceScaleFactor &&
+      first.scale === second.scale,
+  );
+}
 
+function clearDeviceEmulation(view: WebContentsView): void {
   try {
-    await browserDebugger.sendCommand("Emulation.clearDeviceMetricsOverride");
+    view.webContents.disableDeviceEmulation();
   } catch (error) {
     log.warn("Failed to clear browser viewport emulation", error);
-  }
-
-  try {
-    browserDebugger.detach();
-  } catch (error) {
-    log.warn("Failed to detach browser debugger", error);
   }
 }
 
@@ -508,56 +605,51 @@ function getPrimaryPane(): BrowserPaneRuntime | null {
   );
 }
 
-function syncOverlayWindow(): void {
+function syncOverlayView(): void {
   if (!lastBrowserPanesConfig || !mainWindow || mainWindow.isDestroyed()) {
-    overlayWindow?.hide();
+    hideOverlayView();
     return;
   }
 
   const overlay = buildOverlayRenderPayload(lastBrowserPanesConfig);
   if (overlay.panes.length === 0) {
-    overlayWindow?.hide();
+    hideOverlayView();
     return;
   }
 
-  const overlayBounds = getOverlayWindowBounds(overlay.panes.map((pane) => pane.bounds));
+  const overlayBounds = getOverlayViewBounds(overlay.panes.map((pane) => pane.bounds));
   if (!overlayBounds) {
-    overlayWindow?.hide();
+    hideOverlayView();
     return;
   }
 
-  const win = ensureOverlayWindow();
-  if (!win) {
+  const view = ensureOverlayView();
+  if (!view) {
     return;
   }
 
-  const contentBounds = mainWindow.getContentBounds();
   const relativeOverlay: BrowserOverlayRenderPayload = {
     panes: overlay.panes.map((pane) => ({
       ...pane,
       bounds: {
-        x: pane.bounds.x - (overlayBounds.x - contentBounds.x),
-        y: pane.bounds.y - (overlayBounds.y - contentBounds.y),
+        x: pane.bounds.x - overlayBounds.x,
+        y: pane.bounds.y - overlayBounds.y,
         width: pane.bounds.width,
         height: pane.bounds.height,
       },
     })),
   };
 
-  win.setBounds(overlayBounds, false);
+  view.setBounds(overlayBounds);
+  mainWindow.contentView.addChildView(view);
   pendingOverlay = relativeOverlay;
   if (overlayReady) {
     renderOverlay(relativeOverlay);
-  }
-  if (!win.isVisible()) {
-    win.showInactive();
+    view.setVisible(true);
   }
 }
 
-function getOverlayWindowBounds(bounds: Rectangle[]): Rectangle | null {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return null;
-  }
+function getOverlayViewBounds(bounds: Rectangle[]): Rectangle | null {
   const first = bounds[0];
   if (!first) {
     return null;
@@ -579,13 +671,7 @@ function getOverlayWindowBounds(bounds: Rectangle[]): Rectangle | null {
     { ...first },
   );
 
-  const contentBounds = mainWindow.getContentBounds();
-  return {
-    x: contentBounds.x + union.x,
-    y: contentBounds.y + union.y,
-    width: union.width,
-    height: union.height,
-  };
+  return union;
 }
 
 function buildOverlayRenderPayload(config: BrowserPanesConfig): BrowserOverlayRenderPayload {
@@ -611,61 +697,81 @@ function buildOverlayRenderPayload(config: BrowserPanesConfig): BrowserOverlayRe
   };
 }
 
-function ensureOverlayWindow(): BrowserWindow | null {
+function ensureOverlayView(): WebContentsView | null {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return null;
   }
 
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    return overlayWindow;
+  if (overlayView && !overlayView.webContents.isDestroyed()) {
+    return overlayView;
   }
 
   overlayReady = false;
-  overlayWindow = new BrowserWindow({
-    parent: mainWindow,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    movable: false,
-    focusable: false,
-    skipTaskbar: true,
-    hasShadow: false,
-    backgroundColor: "#00000000",
+  overlayView = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
       webSecurity: false,
+      backgroundThrottling: false,
     },
   });
-  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
-  overlayWindow.webContents.once("did-finish-load", () => {
+  overlayView.setBackgroundColor("#00000000");
+  overlayView.setVisible(false);
+  overlayView.webContents.setBackgroundThrottling(false);
+  overlayView.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+  overlayView.webContents.once("did-finish-load", () => {
     overlayReady = true;
     if (pendingOverlay) {
       renderOverlay(pendingOverlay);
+      overlayView?.setVisible(true);
     }
   });
-  overlayWindow.on("closed", () => {
-    overlayWindow = null;
-    overlayReady = false;
-  });
-  overlayWindow.loadURL(
+  mainWindow.contentView.addChildView(overlayView);
+  overlayView.webContents.loadURL(
     `data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml())}`,
   );
 
-  return overlayWindow;
+  return overlayView;
+}
+
+function hideOverlayView(): void {
+  pendingOverlay = null;
+  overlayView?.setVisible(false);
+}
+
+function destroyOverlayView(): void {
+  const view = overlayView;
+  overlayView = null;
+  overlayReady = false;
+  pendingOverlay = null;
+
+  if (!view) {
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.contentView.removeChildView(view);
+  }
+  if (!view.webContents.isDestroyed()) {
+    view.webContents.close({ waitForBeforeUnload: false });
+  }
 }
 
 function renderOverlay(state: BrowserOverlayRenderPayload): void {
-  if (!overlayWindow || overlayWindow.isDestroyed()) {
+  if (!overlayView || overlayView.webContents.isDestroyed()) {
     return;
   }
 
   const serialized = JSON.stringify(state).replace(/</g, "\\u003c");
-  overlayWindow.webContents.executeJavaScript(
+  overlayView.webContents.executeJavaScript(
     `window.__renderPixelPerfectOverlay(${serialized})`,
-  );
+  ).catch((error) => {
+    log.warn("Failed to render browser overlay", error);
+  });
 }
 
 async function checkForUpdates(): Promise<UpdateStatus> {

@@ -1,11 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppData,
+  BrowserPaneOverlaysConfig,
   BrowserPanesConfig,
   BrowserViewConfig,
   ImportedReferenceImage,
   PixelPerfectApi,
   UpdateStatus,
+  WindowChromeState,
 } from "../shared/types";
 
 const api: PixelPerfectApi = {
@@ -31,6 +33,8 @@ const api: PixelPerfectApi = {
     ipcRenderer.invoke("browser:configure", input) as Promise<boolean>,
   configureBrowserPanes: (input: BrowserPanesConfig) =>
     ipcRenderer.invoke("browser-panes:configure", input) as Promise<boolean>,
+  updateBrowserPaneOverlays: (input: BrowserPaneOverlaysConfig) =>
+    ipcRenderer.invoke("browser-panes:update-overlays", input) as Promise<boolean>,
   goBack: () => ipcRenderer.invoke("browser:go-back") as Promise<boolean>,
   reload: () => ipcRenderer.invoke("browser:reload") as Promise<boolean>,
   getBrowserPageTitle: () =>
@@ -39,6 +43,16 @@ const api: PixelPerfectApi = {
     const listener = (_event: Electron.IpcRendererEvent, url: string) => callback(url);
     ipcRenderer.on("browser:url-changed", listener);
     return () => ipcRenderer.removeListener("browser:url-changed", listener);
+  },
+  getWindowChromeState: () =>
+    ipcRenderer.invoke("window:get-chrome-state") as Promise<WindowChromeState>,
+  onWindowChromeStateChanged: (callback) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      state: WindowChromeState,
+    ) => callback(state);
+    ipcRenderer.on("window:chrome-state-changed", listener);
+    return () => ipcRenderer.removeListener("window:chrome-state-changed", listener);
   },
   getVersion: () => ipcRenderer.invoke("app:get-version") as Promise<string>,
   checkForUpdates: () => ipcRenderer.invoke("updates:check") as Promise<UpdateStatus>,

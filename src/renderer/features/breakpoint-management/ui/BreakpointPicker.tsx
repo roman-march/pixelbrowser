@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Plus, Trash2 } from "lucide-react";
+import { Check, Plus, Trash2 } from "lucide-react";
 import type { RefObject } from "react";
 import type { ProjectPage, ResolutionPreset } from "../../../../shared/types";
 
@@ -74,12 +74,12 @@ function BreakpointTrigger({
       onClick={() => onOpenChange(!open)}
     >
       <span className="viewport-pill-label">
-        {activePage?.name ?? "Page"} / {activeResolution.name}
+        {activePage?.name ?? activeResolution.name}
       </span>
-      <span>
+      <span className="viewport-pill-divider" aria-hidden="true" />
+      <span className="viewport-pill-size">
         {activeResolution.width}x{activeResolution.height}
       </span>
-      <ChevronDown />
     </button>
   );
 }

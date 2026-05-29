@@ -2,14 +2,13 @@ import * as Select from "@radix-ui/react-select";
 import * as Slider from "@radix-ui/react-slider";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
+  Blend,
   Check,
-  ChevronDown,
   Eye,
   EyeOff,
   Lock,
-  RotateCcw,
+  SlidersHorizontal,
   Unlock,
-  Wand2,
 } from "lucide-react";
 import type {
   BlendMode,
@@ -38,10 +37,10 @@ export function OverlayControls({
     <>
       <OverlayVisibilityButton overlay={overlay} onUpdate={onResolutionUpdate} />
       <OverlayLockButton overlay={overlay} onUpdate={onResolutionUpdate} />
-      <OverlayOpacityControl overlay={overlay} onUpdate={onResolutionUpdate} />
       <OverlayBlendModeSelect overlay={overlay} onUpdate={onResolutionUpdate} />
-      <OverlayResetButton onUpdate={onResolutionUpdate} />
-      <DiffToggleButton diff={diff} onUpdate={onResolutionUpdate} />
+      <OverlayOpacityControl overlay={overlay} onUpdate={onResolutionUpdate} />
+      <div className="toolbar-separator" aria-hidden="true" />
+      <SettingsToggleButton diff={diff} onUpdate={onResolutionUpdate} />
     </>
   );
 }
@@ -149,10 +148,7 @@ function OverlayBlendModeSelect({ overlay, onUpdate }: OverlayPartProps) {
       }
     >
       <Select.Trigger className="blend-trigger" aria-label="Blend mode">
-        <Select.Value />
-        <Select.Icon className="select-icon">
-          <ChevronDown />
-        </Select.Icon>
+        <Blend />
       </Select.Trigger>
       <Select.Portal>
         <Select.Content
@@ -181,36 +177,14 @@ type UpdateOnlyProps = {
   onUpdate: OverlayControlsProps["onResolutionUpdate"];
 };
 
-function OverlayResetButton({ onUpdate }: UpdateOnlyProps) {
-  return (
-    <IconButton
-      title="Reset overlay"
-      onClick={() =>
-        onUpdate((resolution) => ({
-          ...resolution,
-          overlaySettings: {
-            ...resolution.overlaySettings,
-            offsetX: 0,
-            offsetY: 0,
-            scale: 1,
-          },
-          updatedAt: new Date().toISOString(),
-        }))
-      }
-    >
-      <RotateCcw />
-    </IconButton>
-  );
-}
-
 type DiffToggleButtonProps = UpdateOnlyProps & {
   diff: DiffSettings;
 };
 
-function DiffToggleButton({ diff, onUpdate }: DiffToggleButtonProps) {
+function SettingsToggleButton({ diff, onUpdate }: DiffToggleButtonProps) {
   return (
     <IconButton
-      title="Toggle diff"
+      title="Settings"
       active={diff.enabled}
       onClick={() =>
         onUpdate((resolution) => ({
@@ -223,7 +197,7 @@ function DiffToggleButton({ diff, onUpdate }: DiffToggleButtonProps) {
         }))
       }
     >
-      <Wand2 />
+      <SlidersHorizontal />
     </IconButton>
   );
 }

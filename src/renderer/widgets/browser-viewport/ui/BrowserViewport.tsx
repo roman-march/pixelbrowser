@@ -47,11 +47,13 @@ export function BrowserViewport({
     return () => observer.disconnect();
   }, []);
 
-  const scale = getViewportScale(hostSize, resolution);
-  const displayWidth = Math.round(resolution.width * scale);
-  const displayHeight = Math.round(resolution.height * scale);
+  const viewportSize = getViewportSize(hostSize, resolution);
+  const { displayHeight, displayWidth, scale } = viewportSize;
   const shouldShowOverlay = Boolean(overlay.enabled && overlay.opacity > 0 && image);
   const shouldShowDiff = Boolean(diff.enabled && diff.highlightOpacity > 0 && image);
+  const overlayState = buildBrowserOverlayState({ diff, image, overlay });
+  const overlayStateRef = useRef(overlayState);
+  overlayStateRef.current = overlayState;
 
   useLayoutEffect(() => {
     const frame = frameRef.current;
@@ -63,12 +65,10 @@ export function BrowserViewport({
     void window.pixelPerfect.configureBrowserPanes({
       panes: [
         buildPaneConfig({
-          diff,
           displayHeight,
           displayWidth,
           id: "primary",
-          image,
-          overlay,
+          overlay: overlayStateRef.current,
           rect,
           resolution,
           scale,
@@ -92,16 +92,30 @@ export function BrowserViewport({
     hostSize.height,
     displayWidth,
     displayHeight,
+  ]);
+
+  useLayoutEffect(() => {
+    void window.pixelPerfect.updateBrowserPaneOverlays({
+      panes: [
+        {
+          id: "primary",
+          overlay: overlayState,
+        },
+      ],
+    });
+  }, [
     image?.fileUrl,
     image?.width,
     image?.height,
     shouldShowOverlay,
     shouldShowDiff,
+    overlay.enabled,
     overlay.opacity,
     overlay.blendMode,
     overlay.offsetX,
     overlay.offsetY,
     overlay.scale,
+    diff.enabled,
     diff.highlightOpacity,
   ]);
 
@@ -124,11 +138,6 @@ export function BrowserViewport({
         >
           <div className="native-browser-slot" aria-hidden="true" />
         </div>
-        {scale < 1 ? (
-          <div className="scale-badge">
-            {resolution.width}x{resolution.height} @ {Math.round(scale * 100)}%
-          </div>
-        ) : null}
       </div>
     </section>
   );
@@ -139,21 +148,52 @@ type HostSize = {
   height: number;
 };
 
-function getViewportScale(hostSize: HostSize, resolution: ResolutionPreset) {
-  return Math.min(
+function getViewportSize(hostSize: HostSize, resolution: ResolutionPreset) {
+  const rawScale = Math.min(
     1,
     hostSize.width > 0 ? hostSize.width / resolution.width : 1,
     hostSize.height > 0 ? hostSize.height / resolution.height : 1,
   );
+  const displayWidth = Math.max(1, Math.round(resolution.width * rawScale));
+  const displayHeight = Math.max(1, Math.round(resolution.height * rawScale));
+
+  return {
+    displayWidth,
+    displayHeight,
+    scale: getEmulationScale({
+      displayHeight,
+      displayWidth,
+      resolution,
+    }),
+  };
+}
+
+function getEmulationScale({
+  displayHeight,
+  displayWidth,
+  resolution,
+}: {
+  displayHeight: number;
+  displayWidth: number;
+  resolution: ResolutionPreset;
+}) {
+  const coverScale = Math.max(
+    displayWidth / resolution.width,
+    displayHeight / resolution.height,
+  );
+
+  if (coverScale >= 1) {
+    return 1;
+  }
+
+  return coverScale;
 }
 
 type BuildPaneConfigInput = {
-  diff: DiffSettings;
   displayHeight: number;
   displayWidth: number;
   id: string;
-  image: ReferenceImage | null;
-  overlay: OverlaySettings;
+  overlay: BrowserOverlayState;
   partition: string;
   rect: DOMRect;
   resolution: ResolutionPreset;
@@ -163,11 +203,9 @@ type BuildPaneConfigInput = {
 };
 
 function buildPaneConfig({
-  diff,
   displayHeight,
   displayWidth,
   id,
-  image,
   overlay,
   partition,
   rect,
@@ -193,7 +231,7 @@ function buildPaneConfig({
       deviceScaleFactor: resolution.deviceScaleFactor,
       scale,
     },
-    overlay: buildBrowserOverlayState({ diff, image, overlay }),
+    overlay,
   };
 }
 

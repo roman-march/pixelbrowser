@@ -2,6 +2,7 @@ import type { FormEvent, RefObject } from "react";
 import type {
   DiffSettings,
   OverlaySettings,
+  Project,
   ProjectPage,
   ReferenceImage,
   ResolutionPreset,
@@ -11,7 +12,6 @@ import {
   UrlNavigationForm,
 } from "../../../features/browser-navigation";
 import { BreakpointPicker } from "../../../features/breakpoint-management";
-import { FigmaImportAction } from "../../../features/figma-import";
 import { OverlayControls } from "../../../features/overlay-controls";
 import { ReferenceImageAction } from "../../../features/reference-image";
 import { Toolbar } from "../../../shared/ui/toolbar";
@@ -19,6 +19,7 @@ import { Toolbar } from "../../../shared/ui/toolbar";
 type ControlPanelProps = {
   activeImage: ReferenceImage | null;
   activePage: ProjectPage | null;
+  activeProject: Project | null;
   activeResolution: ResolutionPreset;
   browserDraftUrl: string;
   breakpointPickerRef: RefObject<HTMLDivElement | null>;
@@ -43,6 +44,7 @@ type ControlPanelProps = {
 export function ControlPanel({
   activeImage,
   activePage,
+  activeProject,
   activeResolution,
   browserDraftUrl,
   breakpointPickerRef,
@@ -66,6 +68,7 @@ export function ControlPanel({
       <Toolbar.TrafficSpacer />
       <BrowserNavigationControls />
       <UrlNavigationForm
+        projectName={activeProject?.name ?? "AIXII"}
         value={browserDraftUrl}
         onChange={onUrlDraftChange}
         onSubmit={onUrlSubmit}
@@ -82,12 +85,19 @@ export function ControlPanel({
         onOpenChange={onBreakpointOpenChange}
         onSelect={onBreakpointSelect}
       />
-      <FigmaImportAction onOpen={onFigmaImportOpen} />
+      <Toolbar.Separator />
       <ReferenceImageAction image={activeImage} onSelect={onReferenceSelect} />
       <OverlayControls
         diff={diff}
         overlay={overlay}
         onResolutionUpdate={onResolutionUpdate}
+      />
+      <Toolbar.Separator />
+      <button
+        type="button"
+        className="account-avatar"
+        aria-label="Account"
+        onClick={onFigmaImportOpen}
       />
     </Toolbar>
   );

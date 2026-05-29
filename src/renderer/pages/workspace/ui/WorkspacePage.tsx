@@ -16,6 +16,7 @@ export function WorkspacePage() {
       <ControlPanel
         activeImage={workspace.active.image}
         activePage={workspace.active.page}
+        activeProject={workspace.active.project}
         activeResolution={workspace.active.resolution}
         browserDraftUrl={workspace.browser.draftUrl}
         breakpointPickerRef={workspace.breakpoint.pickerRef}

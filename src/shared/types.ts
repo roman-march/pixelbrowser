@@ -165,6 +165,11 @@ export type UpdateStatus =
   | { state: "downloaded"; version: string }
   | { state: "error"; message: string };
 
+export type WindowChromeState = {
+  platform: string;
+  mode: "window" | "fullscreen";
+};
+
 export type BrowserViewBounds = {
   x: number;
   y: number;
@@ -212,6 +217,15 @@ export type BrowserPanesConfig = {
   maxLivePanes: number;
 };
 
+export type BrowserPaneOverlayConfig = {
+  id: string;
+  overlay: BrowserOverlayState;
+};
+
+export type BrowserPaneOverlaysConfig = {
+  panes: BrowserPaneOverlayConfig[];
+};
+
 export type PixelPerfectApi = {
   getAppData(): Promise<AppData>;
   saveAppData(data: AppData): Promise<AppData>;
@@ -225,10 +239,15 @@ export type PixelPerfectApi = {
   importFigmaFrame(input: FigmaImportFrameRequest): Promise<ImportedReferenceImage>;
   configureBrowser(input: BrowserViewConfig): Promise<boolean>;
   configureBrowserPanes(input: BrowserPanesConfig): Promise<boolean>;
+  updateBrowserPaneOverlays(input: BrowserPaneOverlaysConfig): Promise<boolean>;
   goBack(): Promise<boolean>;
   reload(): Promise<boolean>;
   getBrowserPageTitle(): Promise<string>;
   onBrowserUrlChanged(callback: (url: string) => void): () => void;
+  getWindowChromeState(): Promise<WindowChromeState>;
+  onWindowChromeStateChanged(
+    callback: (state: WindowChromeState) => void,
+  ): () => void;
   getVersion(): Promise<string>;
   checkForUpdates(): Promise<UpdateStatus>;
 };
